@@ -9,6 +9,15 @@ const TABS = [
   ['plantilla', 'Plantilla'], ['F7', 'Fútbol 7'], ['F11', 'Fútbol 11'],
   ['partes', 'Partes totales'], ['goles', 'Goles'],
 ];
+const addMark = (s, key) => ({ ...(s.marks || {}), [key]: 'p' });
+
+function levelOf(marks, pred) {
+  let lvl = '';
+  for (const [k, v] of Object.entries(marks)) {
+    if (pred(k)) { if (v === 'p') return 'p'; lvl = 's'; }
+  }
+  return lvl;
+}
 function useStore() {
   const [state, setState] = useState(() => {
     try { const r = localStorage.getItem(KEY); if (r) return JSON.parse(r); } catch {}
@@ -34,16 +43,20 @@ function useStore() {
 
   const save = async () => {
     setStatus('guardando');
+    const next = {
+      ...state,
+      marks: Object.fromEntries(Object.keys(state.marks || {}).map((k) => [k, 's'])),
+    };
     try {
-      localStorage.setItem(KEY, JSON.stringify(state));
-      await saveCloud(state);
-      setSaved(JSON.stringify(state));
+      localStorage.setItem(KEY, JSON.stringify(next));
+      await saveCloud(next);
+      setState(next);
+      setSaved(JSON.stringify(next));
       setStatus('listo');
     } catch {
       setStatus('error');
     }
   };
-
   return [state, setState, { dirty, status, save }];
 }
 
@@ -132,11 +145,14 @@ const [state, setState, { dirty, status, save }] = useStore();
         {tab === 'plantilla' && <Plantilla stats={stats} setState={setState} />}
         {(tab === 'F7' || tab === 'F11') && <Partidos key={tab} cat={tab} state={state} setState={setState} />}
         {tab === 'partes' && <Partes stats={stats} />}
-        {tab === 'goles' && <Goles stats={stats} setState={setState} />}
-      </main>
-      <footer>
-        <button onClick={exportExcel}>⬇ Exportar a Excel</button>
-      </footer>
+        {tab === 'goles' && <Goles stats={stats} marks={state.marks || {}} setState={setState} />}      </main>
+        <footer>
+          <button onClick={exportExcel}>⬇ Exportar a Excel</button>
+          <button onClick={() => setState((s) => ({
+            ...s,
+            marks: Object.fromEntries(Object.entries(s.marks || {}).filter(([, v]) => v === 'p')),
+          }))}>🧹 Quitar marcas verdes</button>
+        </footer>
     </div>
   );
 }
@@ -189,12 +205,18 @@ function Plantilla({ stats, setState }) {
 function Partidos({ cat, state, setState }) {
   const [rival, setRival] = useState('');
   const matches = state.matches.filter((m) => m.cat === cat);
+  const marks = state.marks || {};
 
   const patchMatch = (id, patch) =>
-    setState((s) => ({ ...s, matches: s.matches.map((m) => (m.id === id ? { ...m, ...patch } : m)) }));
+    setState((s) => ({
+      ...s,
+      marks: addMark(s, `${id}|*`),
+      matches: s.matches.map((m) => (m.id === id ? { ...m, ...patch } : m)),
+    }));
   const setPart = (mid, pid, v) =>
     setState((s) => ({
       ...s,
+      marks: addMark(s, `${mid}|${pid}`),
       matches: s.matches.map((m) => {
         if (m.id !== mid) return m;
         const parts = { ...m.parts };
@@ -212,43 +234,55 @@ function Partidos({ cat, state, setState }) {
       setState((s) => ({ ...s, matches: s.matches.filter((x) => x.id !== m.id) }));
   };
 
+  const colLvl = (m) => levelOf(marks, (k) => k.startsWith(`${m.id}|`));
+  const rowLvl = (p) => levelOf(marks, (k) => k.startsWith(`${cat}-`) && k.endsWith(`|${p.id}`));
+  const cellCls = (m, p, rl, cl) => {
+    const v = marks[`${m.id}|${p.id}`];
+    if (v) return `c-${v}`;
+    const lvl = rl === 'p' || cl === 'p' ? 'p' : rl || cl;
+    return lvl ? `x-${lvl}` : '';
+  };
+
   return (
     <>
-      <p className="hint">Selecciona el número de partes jugadas
-      </p>
+      <p className="hint">Selecciona el número de partes jugadas</p>
       <div className="scroll">
         <table className="grid">
           <thead>
             <tr>
               <th className="sticky">Jugador</th>
-              {matches.map((m) => (
-                <th key={m.id} className={m.played ? '' : 'pending'}>
-                  <div className="rival">{m.rival}</div>
-                  <select value={m.home ?? ''} onChange={(e) => patchMatch(m.id, { home: e.target.value || null })}>
-                    <option value="">Casa/Fuera</option><option value="casa">Casa</option><option value="fuera">Fuera</option>
-                  </select>
-                  <label><input type="checkbox" checked={m.played} onChange={(e) => patchMatch(m.id, { played: e.target.checked })} /> Jugado</label>
-                  <button className="x" title="Eliminar partido" onClick={() => delMatch(m)}>✕</button>
-                </th>
-              ))}
+              {matches.map((m) => {
+                const cl = colLvl(m);
+                return (
+                  <th key={m.id} className={`${m.played ? '' : 'pending'} ${cl ? 'h-' + cl : ''}`}>
+                    <div className="rival">{m.rival}</div>
+                    <select value={m.home ?? ''} onChange={(e) => patchMatch(m.id, { home: e.target.value || null })}>
+                      <option value="">Casa/Fuera</option><option value="casa">Casa</option><option value="fuera">Fuera</option>
+                    </select>
+                    <label><input type="checkbox" checked={m.played} onChange={(e) => patchMatch(m.id, { played: e.target.checked })} /> Jugado</label>
+                    <button className="x" title="Eliminar partido" onClick={() => delMatch(m)}>✕</button>
+                  </th>
+                );
+              })}
               <th>Total</th>
             </tr>
           </thead>
           <tbody>
             {state.players.map((p) => {
+              const rl = rowLvl(p);
               const total = matches.filter((m) => m.played).reduce((a, m) => a + (m.parts[p.id] || 0), 0);
               return (
                 <tr key={p.id}>
-                  <td className="sticky">{p.name}</td>
+                  <td className={`sticky ${rl ? 'h-' + rl : ''}`}>{p.name}</td>
                   {matches.map((m) => (
-                    <td key={m.id} className={m.played ? '' : 'pending'}>
+                    <td key={m.id} className={`${m.played ? '' : 'pending'} ${cellCls(m, p, rl, colLvl(m))}`}>
                       <select value={m.parts[p.id] ?? ''} onChange={(e) => setPart(m.id, p.id, e.target.value)}>
                         <option value=""></option>
                         {[0, 1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}</option>)}
                       </select>
                     </td>
                   ))}
-                  <td className="tot">{total}</td>
+                  <td className={`tot ${rl ? 'x-' + rl : ''}`}>{total}</td>
                 </tr>
               );
             })}
@@ -264,7 +298,6 @@ function Partidos({ cat, state, setState }) {
     </>
   );
 }
-
 /* ---------- PARTES TOTALES ---------- */
 function Partes({ stats }) {
   const list = [...stats].sort((a, b) => b.parts - a.parts || a.p.name.localeCompare(b.p.name));
@@ -284,31 +317,57 @@ function Partes({ stats }) {
 }
 
 /* ---------- GOLES ---------- */
-function Goles({ stats, setState }) {
+function Goles({ stats, marks, setState }) {
   const bump = (id, key, d) =>
     setState((s) => {
       const g = s.goals[id] || { f7: 0, f11: 0 };
-      return { ...s, goals: { ...s.goals, [id]: { ...g, [key]: Math.max(0, g[key] + d) } } };
+      return {
+        ...s,
+        marks: addMark(s, `g|${id}|${key}`),
+        goals: { ...s.goals, [id]: { ...g, [key]: Math.max(0, g[key] + d) } },
+      };
     });
   const list = [...stats].sort((a, b) => b.goals - a.goals || a.p.name.localeCompare(b.p.name));
+
+  const rowLvl = (id) => levelOf(marks, (k) => k.startsWith(`g|${id}|`));
+  const colLvl = (key) => levelOf(marks, (k) => k.startsWith('g|') && k.endsWith(`|${key}`));
+  const cellCls = (id, key, rl, cl) => {
+    const v = marks[`g|${id}|${key}`];
+    if (v) return `c-${v}`;
+    const lvl = rl === 'p' || cl === 'p' ? 'p' : rl || cl;
+    return lvl ? `x-${lvl}` : '';
+  };
+
   const Ctl = ({ id, k, v }) => (
     <div className="ctl">
       <button onClick={() => bump(id, k, -1)}>−</button><b>{v}</b><button onClick={() => bump(id, k, 1)}>+</button>
     </div>
   );
+  const c7 = colLvl('f7'), c11 = colLvl('f11');
+
   return (
     <div className="scroll">
       <table className="grid goals">
-        <thead><tr><th className="sticky">Jugador</th><th>F7</th><th>F11</th><th>Total</th></tr></thead>
+        <thead>
+          <tr>
+            <th className="sticky">Jugador</th>
+            <th className={c7 ? 'h-' + c7 : ''}>F7</th>
+            <th className={c11 ? 'h-' + c11 : ''}>F11</th>
+            <th>Total</th>
+          </tr>
+        </thead>
         <tbody>
-          {list.map((r) => (
-            <tr key={r.p.id}>
-              <td className="sticky">{r.p.name}</td>
-              <td><Ctl id={r.p.id} k="f7" v={r.g7} /></td>
-              <td><Ctl id={r.p.id} k="f11" v={r.g11} /></td>
-              <td className="tot">{r.goals}</td>
-            </tr>
-          ))}
+          {list.map((r) => {
+            const rl = rowLvl(r.p.id);
+            return (
+              <tr key={r.p.id}>
+                <td className={`sticky ${rl ? 'h-' + rl : ''}`}>{r.p.name}</td>
+                <td className={cellCls(r.p.id, 'f7', rl, c7)}><Ctl id={r.p.id} k="f7" v={r.g7} /></td>
+                <td className={cellCls(r.p.id, 'f11', rl, c11)}><Ctl id={r.p.id} k="f11" v={r.g11} /></td>
+                <td className={`tot ${rl ? 'x-' + rl : ''}`}>{r.goals}</td>
+              </tr>
+            );
+          })}
           <tr className="sum">
             <td className="sticky">TOTAL EQUIPO</td>
             <td>{list.reduce((a, r) => a + r.g7, 0)}</td>

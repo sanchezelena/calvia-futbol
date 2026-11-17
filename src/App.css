@@ -50,4 +50,11 @@ footer { display: flex; gap: 8px; margin-top: 24px; }
 .savebar small { color: #5b6b60; }
 button.save.dirty { background: var(--g2); color: #fff; border-color: var(--g2); }
 button.save:disabled { opacity: .6; cursor: default; }
+.grid .x-p { background: #fef3c7 !important; }   /* fila/columna con cambios sin guardar */
+.grid .c-p { background: #fbbf24 !important; }   /* celda cambiada sin guardar */
+.grid .h-p { background: #fde68a !important; }   /* cabecera / nombre */
+.grid .x-s { background: #dcfce7 !important; }   /* fila/columna guardada */
+.grid .c-s { background: #4ade80 !important; }   /* celda guardada */
+.grid .h-s { background: #bbf7d0 !important; }
+.grid td.c-p select, .grid td.c-s select { background: transparent; font-weight: 700; }
 @media (max-width: 600px) { .bar { grid-template-columns: 1fr; gap: 2px; } }
